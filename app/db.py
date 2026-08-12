@@ -54,6 +54,22 @@ ALTER TABLE nav_history ADD COLUMN IF NOT EXISTS est_growth DOUBLE PRECISION;
 CREATE TABLE IF NOT EXISTS trade_calendar (
   date DATE PRIMARY KEY
 );
+
+-- 净值事件：分红派现（每份金额）与拆分折算（每份折算份数）
+ALTER TABLE nav_history ADD COLUMN IF NOT EXISTS dividend    DOUBLE PRECISION;
+ALTER TABLE nav_history ADD COLUMN IF NOT EXISTS split_ratio DOUBLE PRECISION;
+
+-- 用户选择「忽略」的事件，不再提示
+CREATE TABLE IF NOT EXISTS ignored_events (
+  code TEXT NOT NULL,
+  date DATE NOT NULL,
+  PRIMARY KEY (code, date)
+);
+
+-- 拆分产生的份额变动记为一笔 split 流水（金额为 0，只增份额）
+ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_type_check;
+ALTER TABLE transactions ADD CONSTRAINT transactions_type_check
+  CHECK (type IN ('buy','sell','dividend','split'));
 """
 
 # 行情表转 hypertable + 列式压缩，供回测扫描。TimescaleDB 不可用时跳过，

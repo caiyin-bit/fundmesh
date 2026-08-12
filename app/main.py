@@ -1,6 +1,7 @@
 """FundMesh — 国内基金数据大盘。启动: uv run uvicorn app.main:app"""
 
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -92,6 +93,27 @@ def api_market_status():
 @app.get("/api/portfolio/curve")
 def api_portfolio_curve():
     return portfolio.curve()
+
+
+class EventIn(BaseModel):
+    code: str
+    date: str
+    action: str          # cash | reinvest | split | ignore
+
+
+@app.get("/api/events")
+def api_events():
+    return portfolio.pending_events()
+
+
+@app.post("/api/events/resolve")
+def api_resolve_event(ev: EventIn):
+    if ev.action not in ("cash", "reinvest", "split", "ignore"):
+        raise HTTPException(400, "action 必须是 cash/reinvest/split/ignore")
+    try:
+        return portfolio.resolve_event(ev.code, date.fromisoformat(ev.date), ev.action)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/transactions")

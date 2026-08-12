@@ -28,20 +28,37 @@ def sync_nav(code: str) -> str:
 
     nav = block("Data_netWorthTrend")
     if nav:
-        rows = [(code, _ts2date(p["x"]), p["y"], p.get("equityReturn"), None) for p in nav]
+        rows = [(code, _ts2date(p["x"]), p["y"], p.get("equityReturn"), None,
+                 *_parse_event(p.get("unitMoney"))) for p in nav]
         kind = "fund"
     else:
-        rows = [(code, _ts2date(ts), 1.0, None, v) for ts, v in block("Data_millionCopiesIncome")]
+        rows = [(code, _ts2date(ts), 1.0, None, v, None, None)
+                for ts, v in block("Data_millionCopiesIncome")]
         kind = "money"
 
     with pool.connection() as conn:
         conn.cursor().executemany(
-            "INSERT INTO nav_history(code,date,nav,growth,income) VALUES(%s,%s,%s,%s,%s) "
+            "INSERT INTO nav_history(code,date,nav,growth,income,dividend,split_ratio) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (code,date) DO UPDATE SET "
-            "nav = EXCLUDED.nav, growth = EXCLUDED.growth, income = EXCLUDED.income",
+            "nav = EXCLUDED.nav, growth = EXCLUDED.growth, income = EXCLUDED.income, "
+            "dividend = EXCLUDED.dividend, split_ratio = EXCLUDED.split_ratio",
             rows,
         )
     return kind
+
+
+DIVIDEND_RE = re.compile(r"每份派现金([\d.]+)元")
+SPLIT_RE = re.compile(r"每份基金份额折算([\d.]+)份")
+
+
+def _parse_event(text: str | None) -> tuple[float | None, float | None]:
+    """解析净值事件文本，返回 (每份派现金额, 每份折算份数)。"""
+    if not text:
+        return None, None
+    d = DIVIDEND_RE.search(text)
+    s = SPLIT_RE.search(text)
+    return (float(d.group(1)) if d else None), (float(s.group(1)) if s else None)
 
 
 def sync_etf_history(code: str, start: Date) -> None:
@@ -173,7 +190,7 @@ def _money_accrued(code: str, flows: list[dict]) -> tuple[float, float, Date | N
     for r in rows:
         while i < len(events) and events[i]["date"] <= r["date"]:
             f = events[i]
-            shares += f["shares"] if f["type"] == "buy" else -f["shares"] if f["type"] == "sell" else 0
+            shares += share_delta(f)
             i += 1
         if shares > 0 and r["income"]:
             daily = shares / 10000 * r["income"]
@@ -182,15 +199,24 @@ def _money_accrued(code: str, flows: list[dict]) -> tuple[float, float, Date | N
     return round(accrued, 2), round(latest_daily, 2), latest_date
 
 
+def share_delta(f: dict) -> float:
+    """一笔流水引起的份额变动。split 为拆分折算增加的份额，分红不改变份额。"""
+    if f["type"] in ("buy", "split"):
+        return f["shares"]
+    if f["type"] == "sell":
+        return -f["shares"]
+    return 0.0
+
+
 def _cash_flows(flows: list[dict]) -> list[tuple[Date, float]]:
-    """现金流：买入为负（流出），卖出/分红为正（流入）。"""
+    """现金流：买入为负（流出），卖出/分红为正（流入）。拆分不涉及现金。"""
     out = []
     for f in flows:
         if f["type"] == "buy":
             out.append((f["date"], -(f["amount"] + f["fee"])))
         elif f["type"] == "sell":
             out.append((f["date"], f["amount"] - f["fee"]))
-        else:
+        elif f["type"] == "dividend":
             out.append((f["date"], f["amount"]))
     return out
 
@@ -274,13 +300,12 @@ def curve() -> list[dict]:
     for d in dates:
         while i < len(flows) and flows[i]["date"] <= d:
             f = flows[i]
+            shares[f["code"]] += share_delta(f)
             if f["type"] == "buy":
-                shares[f["code"]] += f["shares"]
                 cost += f["amount"] + f["fee"]
             elif f["type"] == "sell":
-                shares[f["code"]] -= f["shares"]
                 cost -= f["amount"] - f["fee"]
-            else:
+            elif f["type"] == "dividend":
                 cost -= f["amount"]
             i += 1
 
@@ -298,6 +323,119 @@ def curve() -> list[dict]:
         points.append({"date": d, "value": round(value, 2), "cost": round(cost, 2)})
 
     return points
+
+
+# ---------- 净值事件（分红 / 拆分） ----------
+
+def pending_events() -> list[dict]:
+    """持仓期内尚未处理的分红与拆分事件。
+
+    不自动记账：分红有现金/再投两种处理方式，金额也可能与理论值有出入，
+    交给用户确认更稳妥。拆分虽然是确定性的，但同样需要用户知情。
+    """
+    flows = list_transactions()
+    if not flows:
+        return []
+    first_buy: dict[str, Date] = {}
+    for f in flows:
+        if f["type"] == "buy":
+            d = first_buy.get(f["code"])
+            first_buy[f["code"]] = min(d, f["date"]) if d else f["date"]
+    if not first_buy:
+        return []
+
+    handled = {(f["code"], f["date"]) for f in flows if f["type"] in ("dividend", "split")}
+    with pool.connection() as conn:
+        ignored = {(r["code"], r["date"]) for r in
+                   conn.execute("SELECT code, date FROM ignored_events").fetchall()}
+        rows = conn.execute(
+            "SELECT code, date, nav, dividend, split_ratio FROM nav_history "
+            # 按时间正序：后面事件的份额依赖前面事件的处理结果，必须顺序处理
+            "WHERE code = ANY(%s) AND (dividend IS NOT NULL OR split_ratio IS NOT NULL) "
+            "ORDER BY date",
+            (list(first_buy),),
+        ).fetchall()
+        names = {r["code"]: r["name"] for r in
+                 conn.execute("SELECT code, name FROM assets").fetchall()}
+
+    out = []
+    for r in rows:
+        key = (r["code"], r["date"])
+        if r["date"] < first_buy[r["code"]] or key in handled or key in ignored:
+            continue
+        shares = _shares_on(flows, r["code"], r["date"])
+        if shares <= 0:
+            continue
+        e = {"code": r["code"], "name": names.get(r["code"], r["code"]),
+             "date": r["date"], "shares": round(shares, 2), "nav": r["nav"]}
+        if r["dividend"]:
+            e.update(kind="dividend", per_share=r["dividend"],
+                     amount=round(shares * r["dividend"], 2))
+        else:
+            e.update(kind="split", ratio=r["split_ratio"],
+                     new_shares=round(shares * (r["split_ratio"] - 1), 2))
+        out.append(e)
+    return out
+
+
+def _shares_on(flows: list[dict], code: str, day: Date) -> float:
+    """某日收盘时持有的份额（含当日流水）。"""
+    return sum(share_delta(f) for f in flows
+               if f["code"] == code and f["date"] <= day)
+
+
+def resolve_event(code: str, day: Date, action: str) -> dict:
+    """处理一个净值事件。action: cash(现金分红) / reinvest(红利再投) / split(应用拆分) / ignore。"""
+    # 拆分会改变份额，先处理晚发生的事件会用错份额基数，故强制按时间顺序
+    earlier = [e for e in pending_events() if e["code"] == code and e["date"] < day]
+    if earlier:
+        raise ValueError(f"请先处理 {earlier[0]['date']} 那笔事件，份额需按时间顺序累积")
+
+    if action == "ignore":
+        with pool.connection() as conn:
+            conn.execute("INSERT INTO ignored_events(code,date) VALUES(%s,%s) "
+                         "ON CONFLICT DO NOTHING", (code, day))
+        return {"ok": True, "action": "ignore"}
+
+    with pool.connection() as conn:
+        row = conn.execute(
+            "SELECT nav, dividend, split_ratio FROM nav_history WHERE code=%s AND date=%s",
+            (code, day)).fetchone()
+    if not row:
+        raise ValueError(f"未找到 {code} 在 {day} 的净值事件")
+
+    flows = list_transactions()
+    shares = _shares_on(flows, code, day)
+    if shares <= 0:
+        raise ValueError("该日没有持仓，无需处理")
+
+    if action == "split":
+        if not row["split_ratio"]:
+            raise ValueError("该事件不是拆分")
+        added = round(shares * (row["split_ratio"] - 1), 2)
+        _insert(code, "split", day, 0, added, row["nav"], f"拆分折算 1:{row['split_ratio']}")
+        return {"ok": True, "action": "split", "added_shares": added}
+
+    if not row["dividend"]:
+        raise ValueError("该事件不是分红")
+    amount = round(shares * row["dividend"], 2)
+    _insert(code, "dividend", day, amount, 0, None, f"每份派现 {row['dividend']} 元")
+    if action == "reinvest":
+        # 红利再投＝分红到账后按当日净值买回，现金净流出为零、份额增加
+        nav = row["nav"]
+        if not nav:
+            raise ValueError("缺少当日净值，无法计算再投份额")
+        _insert(code, "buy", day, amount, round(amount / nav, 2), nav, "红利再投")
+    return {"ok": True, "action": action, "amount": amount}
+
+
+def _insert(code: str, type_: str, day: Date, amount: float,
+            shares: float, price: float | None, note: str) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO transactions(code,type,date,amount,shares,price,fee,note) "
+            "VALUES(%s,%s,%s,%s,%s,%s,0,%s)",
+            (code, type_, day, amount, shares, price, note))
 
 
 def _save_official_navs(navs: dict[str, dict]) -> None:
@@ -376,7 +514,7 @@ def holdings() -> dict:
     for code, fl in by_code.items():
         a = assets.get(code, {})
         kind = a.get("asset", "fund")
-        shares = sum(f["shares"] if f["type"] == "buy" else -f["shares"] if f["type"] == "sell" else 0 for f in fl)
+        shares = sum(share_delta(f) for f in fl)
         cash_out = sum(f["amount"] + f["fee"] for f in fl if f["type"] == "buy")
         cash_in = sum(f["amount"] - f["fee"] for f in fl if f["type"] == "sell")
         cash_in += sum(f["amount"] for f in fl if f["type"] == "dividend")

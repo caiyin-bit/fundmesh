@@ -169,6 +169,24 @@
     background: var(--page); border: 1px solid var(--border); color: var(--text-muted);
   }
   .tag.est { border-color: var(--series-2); color: var(--series-2); cursor: help; }
+  .evt-card {
+    margin-top: 16px; background: var(--surface-1); border: 1px solid var(--border);
+    border-left: 3px solid var(--series-2); border-radius: 10px; padding: 12px 16px;
+  }
+  .evt-card h3 { margin: 0 0 4px; font-size: 14px; }
+  .evt-card .hint { color: var(--text-muted); font-size: 13px; margin-bottom: 10px; }
+  .evt-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 0; border-top: 1px solid var(--gridline); font-size: 13px;
+  }
+  .evt-row .desc { font-variant-numeric: tabular-nums; }
+  .evt-row .acts { margin-left: auto; display: flex; gap: 6px; }
+  .evt-row button {
+    padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--page); color: var(--text-primary); font: inherit; cursor: pointer;
+  }
+  .evt-row button:hover { border-color: var(--series-1); }
+  .evt-row button.ghost { color: var(--text-muted); }
   .mkt { margin-left: 12px; font-size: 13px; color: var(--text-muted); }
   .mkt.live::before {
     content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
@@ -220,6 +238,7 @@
 <div id="view-portfolio" hidden>
   <h2>我的持仓</h2>
   <div id="p-tiles" class="tiles"><div class="loading">加载中…</div></div>
+  <div id="events"></div>
 
   <div style="display:flex;align-items:center;margin-top:24px">
     <h2 style="margin:0">收益曲线</h2>
@@ -519,9 +538,11 @@ async function loadPortfolio() {
   if (!d.holdings.length) {
     $('#p-body').innerHTML = '<div class="loading">还没有持仓，点右上角「记一笔」开始</div>';
     $('#curve-chart').innerHTML = '';
+    $('#events').innerHTML = '';
     return;
   }
   loadCurve();
+  loadEvents();
   const head = ['名称', '代码', '份额', '净值/价', '市值', '当日盈亏', '持有收益', '占比'];
   const rows = d.holdings.map(h => `
     <tr data-code="${h.code}" data-asset="${h.asset}">
@@ -539,6 +560,42 @@ async function loadPortfolio() {
     const tr = e.target.closest('tr');
     if (tr) openHolding(tr.dataset.code, tr.dataset.asset);
   });
+}
+
+/* ---------- 分红 / 拆分事件 ---------- */
+async function loadEvents() {
+  const list = await (await fetch('/api/events')).json();
+  const box = $('#events');
+  if (!list.length) { box.innerHTML = ''; return; }
+  // 只展示最早一笔：后面事件的份额依赖它的处理结果，必须顺序处理
+  const e = list[0];
+  const more = list.length > 1 ? `，之后还有 ${list.length - 1} 笔待处理` : '';
+  const desc = e.kind === 'dividend'
+    ? `<b>${e.name}</b> 于 ${e.date} 每份派现 ${e.per_share} 元，你当时持有 ${fmtMoney(e.shares)} 份，应得 <b>¥${fmtMoney(e.amount)}</b>`
+    : `<b>${e.name}</b> 于 ${e.date} 拆分折算 1:${e.ratio}，你当时持有 ${fmtMoney(e.shares)} 份，应增加 <b>${fmtMoney(e.new_shares)} 份</b>`;
+  const acts = e.kind === 'dividend'
+    ? `<button data-a="cash">现金分红</button><button data-a="reinvest">红利再投</button>`
+    : `<button data-a="split">应用拆分</button>`;
+  box.innerHTML = `
+    <div class="evt-card">
+      <h3>检测到未记账的${e.kind === 'dividend' ? '分红' : '拆分'}${more}</h3>
+      <div class="hint">${e.kind === 'dividend'
+        ? '分红有现金到账和红利再投两种方式，请按你的实际情况选择。'
+        : '拆分会同比增加份额、降低净值，不处理会导致市值算少。'}</div>
+      <div class="evt-row">
+        <span class="desc">${desc}</span>
+        <span class="acts">${acts}<button class="ghost" data-a="ignore">忽略</button></span>
+      </div>
+    </div>`;
+  box.querySelector('.acts').onclick = async ev => {
+    const action = ev.target.dataset.a;
+    if (!action) return;
+    const r = await fetch('/api/events/resolve', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: e.code, date: e.date, action})});
+    if (!r.ok) { alert((await r.json()).detail || '处理失败'); return; }
+    loadPortfolio();
+  };
 }
 
 /* ---------- 交易时段自动刷新 ---------- */
