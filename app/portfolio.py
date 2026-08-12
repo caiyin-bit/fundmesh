@@ -4,7 +4,7 @@ import json
 import re
 from datetime import date as Date, timedelta
 
-from app import data
+from app import data, estimate
 from app.data import SESSION
 from app.db import pool
 
@@ -235,15 +235,17 @@ def curve() -> list[dict]:
 
     with pool.connection() as conn:
         assets = {r["code"]: r for r in conn.execute("SELECT * FROM assets").fetchall()}
-        # 场内 ETF 首次画曲线时才拉历史，避免录入时的无谓等待
+        # 场内 ETF 的历史序列按需增量补齐：首次从建仓日拉全量，之后只补最新一段
         for c in codes:
             if assets.get(c, {}).get("asset") != "etf":
                 continue
-            n = conn.execute(
-                "SELECT COUNT(*) AS n FROM nav_history WHERE code=%s AND date>=%s", (c, start)
-            ).fetchone()["n"]
-            if n == 0:
+            latest = conn.execute(
+                "SELECT MAX(date) AS d FROM nav_history WHERE code=%s", (c,)
+            ).fetchone()["d"]
+            if latest is None:
                 sync_etf_history(c, start)
+            elif latest < Date.today():
+                sync_etf_history(c, latest)
         rows = conn.execute(
             "SELECT code, date, nav, income FROM nav_history "
             "WHERE code = ANY(%s) AND date >= %s ORDER BY date",
@@ -291,6 +293,45 @@ def curve() -> list[dict]:
     return points
 
 
+def _save_official_navs(navs: dict[str, dict]) -> None:
+    """把最新官方净值写回库。曲线依赖 nav_history，不回写会随时间变陈旧；
+    同时让当日 est_growth 与 growth 并存，才能算出估值偏差。"""
+    rows = [(c, n["date"], n["nav"], n["growth"]) for c, n in navs.items() if n.get("nav")]
+    if not rows:
+        return
+    with pool.connection() as conn:
+        conn.cursor().executemany(
+            "INSERT INTO nav_history(code,date,nav,growth) VALUES(%s,%s,%s,%s) "
+            "ON CONFLICT (code,date) DO UPDATE SET nav = EXCLUDED.nav, growth = EXCLUDED.growth",
+            rows,
+        )
+
+
+def _save_estimates(day: Date, estimates: dict[str, dict]) -> None:
+    """留存当日估算值。官方净值到账后与 growth 并存，可回看估值偏差。"""
+    with pool.connection() as conn:
+        conn.cursor().executemany(
+            "INSERT INTO nav_history(code,date,est_growth) VALUES(%s,%s,%s) "
+            "ON CONFLICT (code,date) DO UPDATE SET est_growth = EXCLUDED.est_growth",
+            [(c, day, e["growth"]) for c, e in estimates.items()],
+        )
+
+
+def _estimate_errors(codes: list[str]) -> dict[str, dict]:
+    """最近一次"估算 vs 官方"的偏差，单位百分点。"""
+    if not codes:
+        return {}
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT ON (code) code, date, growth - est_growth AS err "
+            "FROM nav_history WHERE code = ANY(%s) "
+            "AND est_growth IS NOT NULL AND growth IS NOT NULL "
+            "ORDER BY code, date DESC",
+            (codes,),
+        ).fetchall()
+    return {r["code"]: {"date": r["date"], "error": round(r["err"], 2)} for r in rows}
+
+
 def holdings() -> dict:
     flows = list_transactions()
     if not flows:
@@ -306,6 +347,23 @@ def holdings() -> dict:
     etf_codes = [c for c in by_code if assets.get(c, {}).get("asset") == "etf"]
     navs = data.batch_latest_nav(fund_codes) if fund_codes else {}
     quotes = data.etf_quotes(etf_codes) if etf_codes else {}
+
+    if navs:
+        _save_official_navs(navs)
+
+    # 官方净值未出的基金才需要估值；同时取回历史估值偏差用于展示可信度
+    today = Date.today()
+    estimates = {}
+    for c in fund_codes:
+        a = assets.get(c, {})
+        n = navs.get(c)
+        if a.get("asset") == "fund" and n and n["date"] < today:
+            est = estimate.estimate(c, a.get("type", ""), a.get("proxy_code"))
+            if est:
+                estimates[c] = est
+    if estimates:
+        _save_estimates(today, estimates)
+    est_errors = _estimate_errors(list(fund_codes))
 
     out = []
     for code, fl in by_code.items():
@@ -332,14 +390,23 @@ def holdings() -> dict:
                      nav=price, nav_date=q["date"] if q else "")
         else:
             n = navs.get(code)
-            if n:
+            if not n:
+                h.update(value=None, day_pnl=None, nav=None, nav_date="")
+            elif n["date"] < Date.today() and (est := estimates.get(code)):
+                # 官方净值尚未公布，用盘中估算值叠加在最近一期净值上
+                est_nav = n["nav"] * (1 + est["growth"] / 100)
+                h.update(value=round(shares * est_nav, 2),
+                         day_pnl=round(shares * (est_nav - n["nav"]), 2),
+                         nav=round(est_nav, 4), nav_date=Date.today(), day_growth=est["growth"],
+                         estimated=True, est_coverage=est["coverage"], est_source=est["source"])
+            else:
                 nav, chg = n["nav"], n["growth"]
                 prev = nav / (1 + chg / 100) if chg is not None else nav
                 h.update(value=round(shares * nav, 2),
                          day_pnl=round(shares * (nav - prev), 2),
                          nav=nav, nav_date=n["date"], day_growth=chg)
-            else:
-                h.update(value=None, day_pnl=None, nav=None, nav_date="")
+            if code in est_errors:
+                h["est_error"] = est_errors[code]
 
         if h.get("value") is not None:
             h["total_pnl"] = round(h["value"] + cash_in - cash_out, 2)

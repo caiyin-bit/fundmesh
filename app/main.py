@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import data, db, portfolio
+from app import data, db, estimate, portfolio
 
 
 @asynccontextmanager
@@ -79,6 +79,12 @@ class TxIn(BaseModel):
 @app.get("/api/portfolio")
 def api_portfolio():
     return portfolio.holdings()
+
+
+@app.get("/api/market-status")
+def api_market_status():
+    return {"trading": estimate.is_trading_now(),
+            "time": estimate.now_cn().strftime("%Y-%m-%d %H:%M")}
 
 
 @app.get("/api/portfolio/curve")

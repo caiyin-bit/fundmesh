@@ -168,6 +168,12 @@
     font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-left: 6px;
     background: var(--page); border: 1px solid var(--border); color: var(--text-muted);
   }
+  .tag.est { border-color: var(--series-2); color: var(--series-2); cursor: help; }
+  .mkt { margin-left: 12px; font-size: 13px; color: var(--text-muted); }
+  .mkt.live::before {
+    content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--series-2); margin-right: 6px; vertical-align: middle;
+  }
   .tx-list { margin-top: 16px; border-top: 1px solid var(--gridline); padding-top: 12px; }
   .tx-list h4 { margin: 0 0 8px; font-size: 14px; color: var(--text-secondary); }
   .tx-row { display: flex; gap: 12px; align-items: baseline; padding: 5px 0;
@@ -225,6 +231,7 @@
 
   <div style="display:flex;align-items:center;margin-top:24px">
     <h2 style="margin:0">持仓明细</h2>
+    <span id="market-status" class="mkt"></span>
     <button id="tx-add" class="btn-primary" style="margin-left:auto">＋ 记一笔</button>
   </div>
   <div class="table-card">
@@ -478,12 +485,22 @@ $('#nav-tabs').onclick = e => {
   [...$('#nav-tabs').children].forEach(b => b.classList.toggle('active', b.dataset.v === v));
   $('#view-dashboard').hidden = v !== 'dashboard';
   $('#view-portfolio').hidden = v !== 'portfolio';
-  if (v === 'portfolio') loadPortfolio();
+  if (v === 'portfolio') { loadPortfolio(); syncMarketStatus(); }
 };
 
 /* ---------- 持仓 ---------- */
 const fmtMoney = v => v == null ? '—' : v.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const signMoney = v => v == null ? '—' : (v > 0 ? '+' : '') + fmtMoney(v);
+
+/* 净值来源标注：官方净值显示日期，盘中估算显示「估」并在悬停时说明依据 */
+function navTag(h) {
+  const date = (h.nav_date || '').slice(5);
+  if (!h.estimated) return `<span class="tag">${date}</span>`;
+  const err = h.est_error
+    ? `\n上次估算偏差 ${h.est_error.error > 0 ? '+' : ''}${h.est_error.error} 个百分点（${h.est_error.date}）`
+    : '';
+  return `<span class="tag est" title="盘中估算值，非官方净值&#10;依据：${h.est_source}，覆盖净值 ${h.est_coverage}%&#10;收盘后由官方净值自动覆盖${err}">估 ${date}</span>`;
+}
 
 async function loadPortfolio() {
   const d = await (await fetch('/api/portfolio')).json();
@@ -511,7 +528,7 @@ async function loadPortfolio() {
       <td class="name" style="text-align:left">${h.name}<span class="tag">${h.type}</span></td>
       <td>${h.code}</td>
       <td>${fmtMoney(h.shares)}</td>
-      <td>${h.nav ?? '—'}<span class="tag">${(h.nav_date || '').slice(5)}</span></td>
+      <td>${h.nav ?? '—'}${navTag(h)}</td>
       <td>${fmtMoney(h.value)}</td>
       <td class="${cls(h.day_pnl)}">${signMoney(h.day_pnl)}</td>
       <td class="${cls(h.total_pnl)}">${signMoney(h.total_pnl)} ${h.pnl_rate != null ? '(' + fmtPct(h.pnl_rate) + ')' : ''}</td>
@@ -522,6 +539,20 @@ async function loadPortfolio() {
     const tr = e.target.closest('tr');
     if (tr) openHolding(tr.dataset.code, tr.dataset.asset);
   });
+}
+
+/* ---------- 交易时段自动刷新 ---------- */
+let mktTimer;
+async function syncMarketStatus() {
+  const m = await (await fetch('/api/market-status')).json();
+  const el = $('#market-status');
+  el.className = 'mkt' + (m.trading ? ' live' : '');
+  el.textContent = m.trading ? `交易中 · 估值每分钟刷新` : `已收盘 · ${m.time}`;
+  clearInterval(mktTimer);
+  if (m.trading) {
+    // 只在交易时段轮询，收盘后静止，避免无谓请求
+    mktTimer = setInterval(() => { if (!$('#view-portfolio').hidden) loadPortfolio(); }, 60_000);
+  }
 }
 
 /* ---------- 收益曲线 ---------- */

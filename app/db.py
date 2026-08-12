@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS nav_history (
   income DOUBLE PRECISION,
   PRIMARY KEY (code, date)
 );
+
+-- 当日盘中估算涨跌幅。官方净值到账后与 growth 并存，用于回看估值偏差。
+ALTER TABLE nav_history ADD COLUMN IF NOT EXISTS est_growth DOUBLE PRECISION;
 """
 
 # 行情表转 hypertable + 列式压缩，供回测扫描。TimescaleDB 不可用时跳过，

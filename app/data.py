@@ -2,6 +2,7 @@
 
 import threading
 import time
+from datetime import date
 
 import akshare as ak
 import numpy as np
@@ -121,7 +122,7 @@ def batch_latest_nav(codes: list[str]) -> dict[str, dict]:
                 out[d["FCODE"]] = {
                     "nav": float(d["NAV"]),
                     "growth": float(d["NAVCHGRT"]) if d.get("NAVCHGRT") not in (None, "--") else None,
-                    "date": d["PDATE"],
+                    "date": date.fromisoformat(d["PDATE"]),   # 与库内 DATE 列可直接比较
                 }
             except (TypeError, ValueError):
                 continue
