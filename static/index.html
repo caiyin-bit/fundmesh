@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FundMesh · 基金数据大盘</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --page:           #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --up:             #d03b3b;  /* 红涨 */
+    --down:           #006300;  /* 绿跌 */
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:           #0d0d0d;
+    --surface-1:      #1a1a19;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --up:             #e66767;
+    --down:           #0ca30c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 14px 24px; border-bottom: 1px solid var(--gridline);
+    background: var(--surface-1); position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header h1 span { color: var(--series-1); }
+  .search-wrap { position: relative; margin-left: auto; }
+  #theme-toggle {
+    width: 34px; height: 34px; flex: none; padding: 0; font-size: 16px; line-height: 1;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--page); cursor: pointer;
+  }
+  #theme-toggle:hover { border-color: var(--series-1); }
+  .search-wrap input {
+    width: 300px; padding: 7px 12px; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--page); color: var(--text-primary);
+    font: inherit; outline: none;
+  }
+  .search-wrap input:focus { border-color: var(--series-1); }
+  .search-results {
+    position: absolute; top: 40px; right: 0; width: 360px; max-height: 320px;
+    overflow-y: auto; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none;
+  }
+  .search-results.open { display: block; }
+  .search-results div {
+    padding: 8px 12px; cursor: pointer; display: flex; gap: 8px; align-items: baseline;
+  }
+  .search-results div:hover { background: var(--page); }
+  .search-results .code { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .search-results .type { margin-left: auto; color: var(--text-muted); font-size: 12px; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px 24px 60px; }
+  h2 { font-size: 15px; color: var(--text-secondary); margin: 28px 0 12px; font-weight: 600; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .tile .label { color: var(--text-secondary); font-size: 13px; }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+  .tile .delta { font-size: 13px; margin-top: 2px; }
+  .up   { color: var(--up); }
+  .down { color: var(--down); }
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+  .tabs button {
+    padding: 6px 14px; border: 1px solid transparent; border-radius: 8px;
+    background: none; color: var(--text-secondary); font: inherit; cursor: pointer;
+  }
+  .tabs button:hover { background: var(--surface-1); }
+  .tabs button.active {
+    background: var(--surface-1); border-color: var(--border);
+    color: var(--text-primary); font-weight: 600;
+  }
+  .table-card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; margin-top: 12px; overflow-x: auto;
+  }
+  table { border-collapse: collapse; width: 100%; white-space: nowrap; }
+  th, td { padding: 8px 12px; text-align: right; font-variant-numeric: tabular-nums; }
+  th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
+  thead th {
+    color: var(--text-muted); font-weight: 500; font-size: 13px;
+    border-bottom: 1px solid var(--gridline); position: sticky; top: 0;
+    background: var(--surface-1); cursor: pointer; user-select: none;
+  }
+  thead th.sorted { color: var(--text-primary); font-weight: 600; }
+  tbody tr { border-bottom: 1px solid var(--gridline); cursor: pointer; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--page); }
+  td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  .pager {
+    display: flex; align-items: center; gap: 12px; justify-content: flex-end;
+    padding: 10px 14px; color: var(--text-muted); font-size: 13px;
+  }
+  .pager button {
+    padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface-1); color: var(--text-primary); font: inherit; cursor: pointer;
+  }
+  .pager button:disabled { opacity: .4; cursor: default; }
+  .loading { padding: 40px; text-align: center; color: var(--text-muted); }
+  /* 详情浮层 */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.4);
+    display: none; align-items: flex-start; justify-content: center; z-index: 20;
+  }
+  .overlay.open { display: flex; }
+  .modal {
+    background: var(--surface-1); border-radius: 12px; margin-top: 6vh;
+    width: min(860px, 92vw); max-height: 86vh; overflow-y: auto; padding: 20px 24px;
+  }
+  .modal .head { display: flex; align-items: baseline; gap: 10px; }
+  .modal .head h3 { margin: 0; font-size: 18px; }
+  .modal .head .meta { color: var(--text-muted); }
+  .modal .close {
+    margin-left: auto; border: none; background: none; font-size: 20px;
+    color: var(--text-muted); cursor: pointer;
+  }
+  .perf { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+  .perf span {
+    background: var(--page); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: 13px; color: var(--text-secondary);
+  }
+  .perf b { font-variant-numeric: tabular-nums; }
+  .ranges { display: flex; gap: 4px; margin-bottom: 8px; }
+  .ranges button {
+    padding: 4px 12px; border: 1px solid transparent; border-radius: 6px;
+    background: none; color: var(--text-secondary); font: inherit; cursor: pointer;
+  }
+  .ranges button.active { border-color: var(--border); background: var(--page); font-weight: 600; }
+  #nav-chart { width: 100%; height: 340px; }
+  .btn-primary {
+    padding: 7px 16px; border: none; border-radius: 8px; cursor: pointer;
+    background: var(--series-1); color: #fff; font: inherit; font-weight: 600;
+  }
+  .tx-form { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .tx-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px;
+    color: var(--text-secondary); position: relative; }
+  .tx-form input, .tx-form select {
+    padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--page); color: var(--text-primary); font: inherit;
+  }
+  .tx-err { color: var(--up); font-size: 13px; min-height: 18px; }
+  .tag {
+    font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-left: 6px;
+    background: var(--page); border: 1px solid var(--border); color: var(--text-muted);
+  }
+  .tx-list { margin-top: 16px; border-top: 1px solid var(--gridline); padding-top: 12px; }
+  .tx-list h4 { margin: 0 0 8px; font-size: 14px; color: var(--text-secondary); }
+  .tx-row { display: flex; gap: 12px; align-items: baseline; padding: 5px 0;
+    font-size: 13px; font-variant-numeric: tabular-nums; }
+  .tx-row .del { margin-left: auto; border: none; background: none;
+    color: var(--text-muted); cursor: pointer; }
+  .tx-row .del:hover { color: var(--up); }
+</style>
+<script>
+  // 默认亮色；仅当用户显式选过深色时才在首屏前切换，避免闪烁
+  if (localStorage.getItem('theme') === 'dark') document.documentElement.dataset.theme = 'dark';
+</script>
+</head>
+<body>
+<header>
+  <h1>Fund<span>Mesh</span></h1>
+  <nav class="tabs" id="nav-tabs">
+    <button data-v="dashboard" class="active">大盘</button>
+    <button data-v="portfolio">持仓</button>
+  </nav>
+  <div class="search-wrap">
+    <input id="search" type="search" placeholder="搜索基金：代码 / 名称 / 拼音缩写" autocomplete="off">
+    <div id="search-results" class="search-results"></div>
+  </div>
+  <button id="theme-toggle" title="切换明暗主题">🌙</button>
+</header>
+<main>
+<div id="view-dashboard">
+  <h2>核心指数</h2>
+  <div id="tiles" class="tiles"><div class="loading">加载中…</div></div>
+
+  <h2>基金排行</h2>
+  <div id="tabs" class="tabs"></div>
+  <div class="table-card">
+    <div id="rank-body"><div class="loading">首次加载全市场排行需 10–30 秒…</div></div>
+    <div class="pager">
+      <span id="pager-info"></span>
+      <button id="prev">上一页</button>
+      <button id="next">下一页</button>
+    </div>
+  </div>
+</div>
+
+<div id="view-portfolio" hidden>
+  <h2>我的持仓</h2>
+  <div id="p-tiles" class="tiles"><div class="loading">加载中…</div></div>
+  <div style="display:flex;align-items:center;margin-top:24px">
+    <h2 style="margin:0">持仓明细</h2>
+    <button id="tx-add" class="btn-primary" style="margin-left:auto">＋ 记一笔</button>
+  </div>
+  <div class="table-card">
+    <div id="p-body"><div class="loading">加载中…</div></div>
+  </div>
+</div>
+</main>
+
+<div id="tx-overlay" class="overlay">
+  <div class="modal" style="width:min(480px,92vw)">
+    <div class="head"><h3>记一笔交易</h3><button class="close" id="tx-close">✕</button></div>
+    <form id="tx-form" class="tx-form">
+      <label>类型
+        <select name="type">
+          <option value="buy">买入</option>
+          <option value="sell">卖出</option>
+          <option value="dividend">现金分红</option>
+        </select>
+      </label>
+      <label>标的
+        <select name="asset">
+          <option value="fund">场外基金</option>
+          <option value="etf">场内 ETF</option>
+        </select>
+      </label>
+      <label>代码
+        <input name="code" required placeholder="基金/ETF 代码" autocomplete="off">
+        <div id="tx-suggest" class="search-results" style="top:auto;left:0;right:auto;width:100%"></div>
+      </label>
+      <label>确认日期 <input name="date" type="date" required></label>
+      <label>金额（元）<input name="amount" type="number" step="0.01" min="0" required placeholder="买入=掏的钱 / 卖出=到账"></label>
+      <label>份额 <input name="shares" type="number" step="0.01" placeholder="留空自动按净值计算"></label>
+      <label>成交价 <input name="price" type="number" step="0.0001" placeholder="ETF 必填，场外留空"></label>
+      <label>手续费 <input name="fee" type="number" step="0.01" value="0"></label>
+      <label>备注 <input name="note" placeholder="可选"></label>
+      <div id="tx-err" class="tx-err"></div>
+      <button type="submit" class="btn-primary">保存</button>
+    </form>
+  </div>
+</div>
+
+<div id="overlay" class="overlay">
+  <div class="modal">
+    <div class="head">
+      <h3 id="m-name"></h3>
+      <span id="m-meta" class="meta"></span>
+      <button class="close" id="m-close">✕</button>
+    </div>
+    <div id="m-perf" class="perf"></div>
+    <div class="ranges" id="m-ranges"></div>
+    <div id="nav-chart"></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const fmtPct = v => v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(2) + '%';
+const cls = v => v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '';
+
+/* ---------- 核心指数 ---------- */
+async function loadIndices() {
+  try {
+    const list = await (await fetch('/api/indices')).json();
+    $('#tiles').innerHTML = list.map(x => `
+      <div class="tile">
+        <div class="label">${x.name}</div>
+        <div class="value">${x.price.toLocaleString()}</div>
+        <div class="delta ${cls(x.change_pct)}">${x.change_amt > 0 ? '+' : ''}${x.change_amt}　${fmtPct(x.change_pct)}</div>
+      </div>`).join('');
+  } catch { $('#tiles').innerHTML = '<div class="loading">指数加载失败</div>'; }
+}
+loadIndices();
+setInterval(loadIndices, 60_000);
+
+/* ---------- 排行 ---------- */
+const CATS = ['全部','股票型','混合型','债券型','指数型','QDII','FOF'];
+const COLS = ['基金代码','基金简称','单位净值','日增长率','近1周','近1月','近3月','近6月','近1年','近3年','今年来'];
+const PCT_COLS = new Set(['日增长率','近1周','近1月','近3月','近6月','近1年','近3年','今年来']);
+const state = { category: '全部', sort: '日增长率', order: 'desc', page: 1, size: 50, total: 0 };
+
+$('#tabs').innerHTML = CATS.map(c =>
+  `<button data-c="${c}" class="${c === state.category ? 'active' : ''}">${c}</button>`).join('');
+$('#tabs').onclick = e => {
+  const c = e.target.dataset.c;
+  if (!c) return;
+  state.category = c; state.page = 1;
+  [...$('#tabs').children].forEach(b => b.classList.toggle('active', b.dataset.c === c));
+  loadRank();
+};
+
+async function loadRank() {
+  $('#rank-body').innerHTML = '<div class="loading">加载中…</div>';
+  const q = new URLSearchParams({ category: state.category, sort: state.sort,
+    order: state.order, page: state.page, size: state.size });
+  try {
+    const d = await (await fetch('/api/rank?' + q)).json();
+    state.total = d.total;
+    renderRank(d.rows);
+  } catch { $('#rank-body').innerHTML = '<div class="loading">排行加载失败，请重试</div>'; }
+}
+
+function renderRank(rows) {
+  const arrow = state.order === 'desc' ? ' ↓' : ' ↑';
+  const thead = COLS.map(c => {
+    const sortable = PCT_COLS.has(c) || c === '单位净值';
+    return `<th data-col="${sortable ? c : ''}" class="${c === state.sort ? 'sorted' : ''}">${c}${c === state.sort ? arrow : ''}</th>`;
+  }).join('');
+  const body = rows.map(r => `<tr data-code="${r['基金代码']}">` + COLS.map(c => {
+    const v = r[c];
+    if (c === '基金简称') return `<td class="name">${v ?? ''}</td>`;
+    if (PCT_COLS.has(c)) return `<td class="${cls(v)}">${fmtPct(v)}</td>`;
+    return `<td>${v ?? '—'}</td>`;
+  }).join('') + '</tr>').join('');
+  $('#rank-body').innerHTML =
+    `<table><thead><tr>${thead}</tr></thead><tbody>${body}</tbody></table>`;
+  const last = Math.max(1, Math.ceil(state.total / state.size));
+  $('#pager-info').textContent = `共 ${state.total.toLocaleString()} 只 · 第 ${state.page}/${last} 页`;
+  $('#prev').disabled = state.page <= 1;
+  $('#next').disabled = state.page >= last;
+  $('#rank-body').querySelector('tbody').onclick = e => {
+    const tr = e.target.closest('tr');
+    if (tr) openDetail(tr.dataset.code);
+  };
+  $('#rank-body').querySelector('thead').onclick = e => {
+    const col = e.target.dataset.col;
+    if (!col) return;
+    if (state.sort === col) state.order = state.order === 'desc' ? 'asc' : 'desc';
+    else { state.sort = col; state.order = 'desc'; }
+    state.page = 1;
+    loadRank();
+  };
+}
+$('#prev').onclick = () => { state.page--; loadRank(); };
+$('#next').onclick = () => { state.page++; loadRank(); };
+loadRank();
+
+/* ---------- 搜索 ---------- */
+let timer;
+$('#search').oninput = e => {
+  clearTimeout(timer);
+  const q = e.target.value.trim();
+  if (!q) return $('#search-results').classList.remove('open');
+  timer = setTimeout(async () => {
+    const list = await (await fetch('/api/search?q=' + encodeURIComponent(q))).json();
+    const box = $('#search-results');
+    box.innerHTML = list.length
+      ? list.map(x => `<div data-code="${x.code}"><span class="code">${x.code}</span>${x.name}<span class="type">${x.type}</span></div>`).join('')
+      : '<div>无结果</div>';
+    box.classList.add('open');
+  }, 300);
+};
+$('#search-results').onclick = e => {
+  const code = e.target.closest('[data-code]')?.dataset.code;
+  if (!code) return;
+  $('#search-results').classList.remove('open');
+  openDetail(code);
+};
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) $('#search-results').classList.remove('open');
+});
+
+/* ---------- 详情 ---------- */
+const RANGES = [['3月', 63], ['1年', 250], ['3年', 750], ['全部', Infinity]];
+let chart, navData = [], curRange = 250;
+
+async function openDetail(code) {
+  $('#overlay').classList.add('open');
+  $('#overlay .tx-list')?.remove();
+  $('#m-name').textContent = '加载中…';
+  $('#m-meta').textContent = code;
+  $('#m-perf').innerHTML = '';
+  const d = await (await fetch('/api/fund/' + code)).json();
+  $('#m-name').textContent = d.name;
+  $('#m-meta').textContent = `${d.code} · ${d.type}`;
+  const P = d.performance || {};
+  $('#m-perf').innerHTML = ['日增长率','近1月','近3月','近6月','近1年','近3年','今年来']
+    .map(k => `<span>${k} <b class="${cls(P[k])}">${fmtPct(P[k])}</b></span>`).join('');
+  navData = d.nav_history || [];
+  curRange = 250;
+  renderRanges();
+  renderChart();
+}
+$('#m-close').onclick = () => $('#overlay').classList.remove('open');
+$('#overlay').onclick = e => { if (e.target === $('#overlay')) $('#overlay').classList.remove('open'); };
+
+function renderRanges() {
+  $('#m-ranges').innerHTML = RANGES.map(([label, n]) =>
+    `<button data-n="${n}" class="${n === curRange ? 'active' : ''}">${label}</button>`).join('');
+  $('#m-ranges').onclick = e => {
+    const n = e.target.dataset.n;
+    if (!n) return;
+    curRange = Number(n);
+    renderRanges();
+    renderChart();
+  };
+}
+
+function renderChart() {
+  const css = getComputedStyle(document.documentElement);
+  const C = name => css.getPropertyValue(name).trim();
+  const slice = navData.slice(-Math.min(curRange, navData.length));
+  chart = chart || echarts.init($('#nav-chart'));
+  chart.setOption({
+    grid: { left: 56, right: 16, top: 16, bottom: 28 },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross', label: { backgroundColor: C('--text-secondary') } },
+      backgroundColor: C('--surface-1'), borderColor: C('--gridline'),
+      textStyle: { color: C('--text-primary') },
+      valueFormatter: v => v?.toFixed(4),
+    },
+    xAxis: {
+      type: 'category', data: slice.map(x => x.date), boundaryGap: false,
+      axisLine: { lineStyle: { color: C('--baseline') } },
+      axisLabel: { color: C('--text-muted') }, axisTick: { show: false },
+    },
+    yAxis: {
+      type: 'value', scale: true,
+      splitLine: { lineStyle: { color: C('--gridline'), width: 1 } },
+      axisLabel: { color: C('--text-muted') },
+    },
+    series: [{
+      name: '单位净值', type: 'line', data: slice.map(x => x.nav),
+      showSymbol: false, lineStyle: { width: 2, color: C('--series-1') },
+      itemStyle: { color: C('--series-1') },
+      areaStyle: { color: C('--series-1'), opacity: 0.1 },
+    }],
+  }, true);
+}
+window.addEventListener('resize', () => chart?.resize());
+
+/* ---------- 主题 ---------- */
+const isDark = () => document.documentElement.dataset.theme === 'dark';
+const syncThemeIcon = () => $('#theme-toggle').textContent = isDark() ? '☀️' : '🌙';
+syncThemeIcon();
+$('#theme-toggle').onclick = () => {
+  const next = isDark() ? 'light' : 'dark';
+  if (next === 'dark') document.documentElement.dataset.theme = 'dark';
+  else delete document.documentElement.dataset.theme;
+  localStorage.setItem('theme', next);
+  syncThemeIcon();
+  if (chart) renderChart();   // ECharts 配色在渲染时读取 CSS 变量，需重绘
+};
+
+/* ---------- 视图切换 ---------- */
+$('#nav-tabs').onclick = e => {
+  const v = e.target.dataset.v;
+  if (!v) return;
+  [...$('#nav-tabs').children].forEach(b => b.classList.toggle('active', b.dataset.v === v));
+  $('#view-dashboard').hidden = v !== 'dashboard';
+  $('#view-portfolio').hidden = v !== 'portfolio';
+  if (v === 'portfolio') loadPortfolio();
+};
+
+/* ---------- 持仓 ---------- */
+const fmtMoney = v => v == null ? '—' : v.toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const signMoney = v => v == null ? '—' : (v > 0 ? '+' : '') + fmtMoney(v);
+
+async function loadPortfolio() {
+  const d = await (await fetch('/api/portfolio')).json();
+  const s = d.summary;
+  $('#p-tiles').innerHTML = `
+    <div class="tile"><div class="label">总资产</div><div class="value">¥${fmtMoney(s.value)}</div>
+      <div class="delta">净投入 ¥${fmtMoney(s.cost)}</div></div>
+    <div class="tile"><div class="label">当日盈亏</div>
+      <div class="value ${cls(s.day_pnl)}">${signMoney(s.day_pnl)}</div><div class="delta">&nbsp;</div></div>
+    <div class="tile"><div class="label">累计收益</div>
+      <div class="value ${cls(s.total_pnl)}">${signMoney(s.total_pnl)}</div>
+      <div class="delta ${cls(s.pnl_rate)}">${fmtPct(s.pnl_rate)}</div></div>`;
+  if (!d.holdings.length) {
+    $('#p-body').innerHTML = '<div class="loading">还没有持仓，点右上角「记一笔」开始</div>';
+    return;
+  }
+  const head = ['名称', '代码', '份额', '净值/价', '市值', '当日盈亏', '持有收益', '占比'];
+  const rows = d.holdings.map(h => `
+    <tr data-code="${h.code}" data-asset="${h.asset}">
+      <td class="name" style="text-align:left">${h.name}<span class="tag">${h.type}</span></td>
+      <td>${h.code}</td>
+      <td>${fmtMoney(h.shares)}</td>
+      <td>${h.nav ?? '—'}<span class="tag">${(h.nav_date || '').slice(5)}</span></td>
+      <td>${fmtMoney(h.value)}</td>
+      <td class="${cls(h.day_pnl)}">${signMoney(h.day_pnl)}</td>
+      <td class="${cls(h.total_pnl)}">${signMoney(h.total_pnl)} ${h.pnl_rate != null ? '(' + fmtPct(h.pnl_rate) + ')' : ''}</td>
+      <td>${h.weight}%</td>
+    </tr>`).join('');
+  $('#p-body').innerHTML = `<table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
+  $('#p-body tbody') && ($('#p-body').querySelector('tbody').onclick = e => {
+    const tr = e.target.closest('tr');
+    if (tr) openHolding(tr.dataset.code, tr.dataset.asset);
+  });
+}
+
+async function openHolding(code, asset) {
+  if (asset === 'etf') {
+    $('#overlay').classList.add('open');
+    $('#m-name').textContent = '场内 ETF';
+    $('#m-meta').textContent = code;
+    $('#m-perf').innerHTML = ''; $('#m-ranges').innerHTML = '';
+    if (chart) { chart.dispose(); chart = null; }
+    $('#nav-chart').innerHTML = '';
+  } else {
+    await openDetail(code);
+  }
+  const txs = await (await fetch('/api/transactions?code=' + code)).json();
+  const TYPES = {buy: '买入', sell: '卖出', dividend: '分红'};
+  const old = $('#overlay .tx-list'); if (old) old.remove();
+  const div = document.createElement('div');
+  div.className = 'tx-list';
+  div.innerHTML = '<h4>交易流水</h4>' + (txs.length ? txs.map(t => `
+    <div class="tx-row"><span>${t.date}</span><span>${TYPES[t.type]}</span>
+      <span>¥${fmtMoney(t.amount)}</span><span>${t.shares ? t.shares + ' 份' : ''}</span>
+      <span>${t.price ? '@' + t.price : ''}</span>${t.fee ? `<span>费 ${t.fee}</span>` : ''}
+      <button class="del" data-id="${t.id}" title="删除">✕</button></div>`).join('')
+    : '<div class="tx-row">暂无流水</div>');
+  div.onclick = async e => {
+    const id = e.target.dataset.id;
+    if (!id || !confirm('删除这笔流水？')) return;
+    await fetch('/api/transactions/' + id, {method: 'DELETE'});
+    $('#overlay').classList.remove('open');
+    loadPortfolio();
+  };
+  $('#overlay .modal').appendChild(div);
+}
+
+/* ---------- 记一笔 ---------- */
+$('#tx-add').onclick = () => {
+  $('#tx-form').reset();
+  $('#tx-form').elements.date.value = new Date().toISOString().slice(0, 10);
+  $('#tx-err').textContent = '';
+  $('#tx-overlay').classList.add('open');
+};
+$('#tx-close').onclick = () => $('#tx-overlay').classList.remove('open');
+$('#tx-overlay').onclick = e => { if (e.target === $('#tx-overlay')) $('#tx-overlay').classList.remove('open'); };
+
+let txTimer;
+$('#tx-form').elements.code.oninput = e => {
+  clearTimeout(txTimer);
+  if ($('#tx-form').elements.asset.value === 'etf') return;
+  const q = e.target.value.trim();
+  if (q.length < 2) return $('#tx-suggest').classList.remove('open');
+  txTimer = setTimeout(async () => {
+    const list = await (await fetch('/api/search?q=' + encodeURIComponent(q))).json();
+    $('#tx-suggest').innerHTML = list.slice(0, 8).map(x =>
+      `<div data-code="${x.code}"><span class="code">${x.code}</span>${x.name}</div>`).join('');
+    $('#tx-suggest').classList.add('open');
+  }, 300);
+};
+$('#tx-suggest').onclick = e => {
+  const code = e.target.closest('[data-code]')?.dataset.code;
+  if (code) {
+    $('#tx-form').elements.code.value = code;
+    $('#tx-suggest').classList.remove('open');
+  }
+};
+
+$('#tx-form').onsubmit = async e => {
+  e.preventDefault();
+  const f = e.target.elements;
+  const body = {
+    code: f.code.value.trim(), asset: f.asset.value, type: f.type.value,
+    date: f.date.value, amount: Number(f.amount.value),
+    shares: f.shares.value ? Number(f.shares.value) : null,
+    price: f.price.value ? Number(f.price.value) : null,
+    fee: Number(f.fee.value || 0), note: f.note.value,
+  };
+  const r = await fetch('/api/transactions', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok) {
+    $('#tx-err').textContent = (await r.json()).detail || '保存失败';
+    return;
+  }
+  $('#tx-overlay').classList.remove('open');
+  loadPortfolio();
+};
+</script>
+</body>
+</html>

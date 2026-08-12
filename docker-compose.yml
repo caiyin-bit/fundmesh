@@ -1,0 +1,23 @@
+services:
+  db:
+    # 磁盘空间恢复后可换成 timescale/timescaledb:latest-pg17（同为 PG17，数据卷兼容），
+    # 再执行 CREATE EXTENSION timescaledb 并把 nav_history 转成 hypertable
+    image: postgres:17-alpine
+    container_name: fundmesh-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fundmesh}
+      POSTGRES_USER: ${POSTGRES_USER:-fundmesh}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fundmesh}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fundmesh}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

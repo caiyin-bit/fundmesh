@@ -1,0 +1,14 @@
+[project]
+name = "fundmesh"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "akshare>=1.18.84",
+    "fastapi>=0.141.1",
+    "psycopg[binary,pool]>=3.3.4",
+    "uvicorn>=0.52.1",
+]
+
+[dependency-groups]
+dev = []
