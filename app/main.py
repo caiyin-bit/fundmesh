@@ -81,6 +81,11 @@ def api_portfolio():
     return portfolio.holdings()
 
 
+@app.get("/api/portfolio/curve")
+def api_portfolio_curve():
+    return portfolio.curve()
+
+
 @app.get("/api/transactions")
 def api_transactions(code: str | None = None):
     return portfolio.list_transactions(code)

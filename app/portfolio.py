@@ -44,6 +44,19 @@ def sync_nav(code: str) -> str:
     return kind
 
 
+def sync_etf_history(code: str, start: Date) -> None:
+    """场内 ETF 日线收盘价入库（与基金净值共用 nav_history，语义都是"每份价值"）。"""
+    rows = data.etf_history(code, start.isoformat(), Date.today().isoformat())
+    if not rows:
+        return
+    with pool.connection() as conn:
+        conn.cursor().executemany(
+            "INSERT INTO nav_history(code,date,nav,growth,income) VALUES(%s,%s,%s,NULL,NULL) "
+            "ON CONFLICT (code,date) DO UPDATE SET nav = EXCLUDED.nav",
+            [(code, d, v) for d, v in rows],
+        )
+
+
 def _ts2date(ms: int) -> Date:
     # 东财时间戳是北京时间零点，按 UTC 转会早一天，需 +8h
     return Date(1970, 1, 1) + timedelta(milliseconds=ms, hours=8)
@@ -162,6 +175,122 @@ def _money_accrued(code: str, flows: list[dict]) -> tuple[float, float, Date | N
     return round(accrued, 2), round(latest_daily, 2), latest_date
 
 
+def _cash_flows(flows: list[dict]) -> list[tuple[Date, float]]:
+    """现金流：买入为负（流出），卖出/分红为正（流入）。"""
+    out = []
+    for f in flows:
+        if f["type"] == "buy":
+            out.append((f["date"], -(f["amount"] + f["fee"])))
+        elif f["type"] == "sell":
+            out.append((f["date"], f["amount"] - f["fee"]))
+        else:
+            out.append((f["date"], f["amount"]))
+    return out
+
+
+def xirr(cash_flows: list[tuple[Date, float]]) -> float | None:
+    """资金加权年化收益率。牛顿法求解，不收敛则二分兜底。"""
+    if len(cash_flows) < 2:
+        return None
+    t0 = min(d for d, _ in cash_flows)
+    years = [((d - t0).days / 365.0, v) for d, v in cash_flows]
+    if not (any(v < 0 for _, v in years) and any(v > 0 for _, v in years)):
+        return None
+
+    def npv(rate):
+        return sum(v / (1 + rate) ** t for t, v in years)
+
+    rate = 0.1
+    for _ in range(50):
+        f = npv(rate)
+        df = sum(-t * v / (1 + rate) ** (t + 1) for t, v in years)
+        if abs(df) < 1e-12:
+            break
+        step = f / df
+        rate -= step
+        if rate <= -0.9999:
+            rate = -0.99
+        if abs(step) < 1e-8:
+            return round(rate * 100, 2)
+
+    lo, hi = -0.9999, 100.0                     # 牛顿法失败时二分
+    if npv(lo) * npv(hi) > 0:
+        return None
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if npv(lo) * npv(mid) <= 0:
+            hi = mid
+        else:
+            lo = mid
+    return round((lo + hi) / 2 * 100, 2)
+
+
+def curve() -> list[dict]:
+    """组合逐日市值与累计投入。由流水 × 历史净值全量回溯，不依赖任何快照。"""
+    flows = sorted(list_transactions(), key=lambda f: f["date"])
+    if not flows:
+        return []
+    start = flows[0]["date"]
+    codes = {f["code"] for f in flows}
+
+    with pool.connection() as conn:
+        assets = {r["code"]: r for r in conn.execute("SELECT * FROM assets").fetchall()}
+        # 场内 ETF 首次画曲线时才拉历史，避免录入时的无谓等待
+        for c in codes:
+            if assets.get(c, {}).get("asset") != "etf":
+                continue
+            n = conn.execute(
+                "SELECT COUNT(*) AS n FROM nav_history WHERE code=%s AND date>=%s", (c, start)
+            ).fetchone()["n"]
+            if n == 0:
+                sync_etf_history(c, start)
+        rows = conn.execute(
+            "SELECT code, date, nav, income FROM nav_history "
+            "WHERE code = ANY(%s) AND date >= %s ORDER BY date",
+            (list(codes), start),
+        ).fetchall()
+    if not rows:
+        return []
+
+    series: dict[str, dict[Date, dict]] = {}
+    for r in rows:
+        series.setdefault(r["code"], {})[r["date"]] = r
+    dates = sorted({r["date"] for r in rows})
+
+    shares = dict.fromkeys(codes, 0.0)
+    accrued = dict.fromkeys(codes, 0.0)          # 货基累计收益
+    last_nav = dict.fromkeys(codes, 0.0)         # 停牌/无数据时前值填充
+    cost, i, points = 0.0, 0, []
+
+    for d in dates:
+        while i < len(flows) and flows[i]["date"] <= d:
+            f = flows[i]
+            if f["type"] == "buy":
+                shares[f["code"]] += f["shares"]
+                cost += f["amount"] + f["fee"]
+            elif f["type"] == "sell":
+                shares[f["code"]] -= f["shares"]
+                cost -= f["amount"] - f["fee"]
+            else:
+                cost -= f["amount"]
+            i += 1
+
+        value = 0.0
+        for c in codes:
+            row = series.get(c, {}).get(d)
+            if assets.get(c, {}).get("asset") == "money":
+                if row and row["income"]:
+                    accrued[c] += shares[c] / 10000 * row["income"]
+                value += shares[c] + accrued[c]
+            else:
+                if row and row["nav"]:
+                    last_nav[c] = row["nav"]
+                value += shares[c] * last_nav[c]
+        points.append({"date": d, "value": round(value, 2), "cost": round(cost, 2)})
+
+    return points
+
+
 def holdings() -> dict:
     flows = list_transactions()
     if not flows:
@@ -227,5 +356,7 @@ def holdings() -> dict:
         "cost": round(sum(h["net_cost"] for h in out), 2),
     }
     summary["pnl_rate"] = round(summary["total_pnl"] / summary["cost"] * 100, 2) if summary["cost"] else None
+    # 年化：把当前市值当作今天全部赎回的一笔流入
+    summary["xirr"] = xirr(_cash_flows(flows) + [(Date.today(), total_value)])
     out.sort(key=lambda h: -(h["value"] or 0))
     return {"summary": summary, "holdings": out}

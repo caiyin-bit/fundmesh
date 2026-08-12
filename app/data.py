@@ -156,6 +156,31 @@ def etf_quotes(codes: list[str]) -> dict[str, dict]:
     return _cached(key, 30, fetch)
 
 
+def etf_history(code: str, start: str, end: str) -> list[tuple[str, float]]:
+    """腾讯行情：场内 ETF 日线收盘价。返回 [(日期, 收盘价)]。
+
+    单次上限 640 条，故按窗口向前分段拉取。只有前复权(qfq)可用——它以最新价为锚，
+    终点与实时价一致，历史点按分红回调（总回报视角）。
+    """
+    sym = _etf_symbol(code)
+    out: dict[str, float] = {}
+    cursor = end
+    while cursor > start:
+        r = SESSION.get("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+                        params={"param": f"{sym},day,{start},{cursor},640,qfq"}, timeout=20)
+        d = r.json().get("data", {}).get(sym) or {}
+        rows = d.get("qfqday") or d.get("day") or []
+        if not rows:
+            break
+        for x in rows:
+            out[x[0]] = float(x[2])          # [日期, 开, 收, 高, 低, 量]
+        earliest = rows[0][0]
+        if earliest <= start or len(rows) < 640:
+            break
+        cursor = earliest                     # 继续向前取上一段
+    return sorted(out.items())
+
+
 def fund_detail(code: str) -> dict | None:
     flist = fund_list_df()
     row = flist[flist["基金代码"] == code]

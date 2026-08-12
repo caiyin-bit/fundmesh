@@ -17,6 +17,7 @@
     --baseline:       #c3c2b7;
     --border:         rgba(11,11,11,0.10);
     --series-1:       #2a78d6;
+    --series-2:       #eb6834;
     --up:             #d03b3b;  /* 红涨 */
     --down:           #006300;  /* 绿跌 */
   }
@@ -31,6 +32,7 @@
     --baseline:       #383835;
     --border:         rgba(255,255,255,0.10);
     --series-1:       #3987e5;
+    --series-2:       #d95926;
     --up:             #e66767;
     --down:           #0ca30c;
   }
@@ -212,6 +214,15 @@
 <div id="view-portfolio" hidden>
   <h2>我的持仓</h2>
   <div id="p-tiles" class="tiles"><div class="loading">加载中…</div></div>
+
+  <div style="display:flex;align-items:center;margin-top:24px">
+    <h2 style="margin:0">收益曲线</h2>
+    <div class="ranges" id="c-ranges" style="margin-left:auto"></div>
+  </div>
+  <div class="table-card" style="padding:14px 10px 6px">
+    <div id="curve-chart" style="width:100%;height:300px"></div>
+  </div>
+
   <div style="display:flex;align-items:center;margin-top:24px">
     <h2 style="margin:0">持仓明细</h2>
     <button id="tx-add" class="btn-primary" style="margin-left:auto">＋ 记一笔</button>
@@ -443,7 +454,7 @@ function renderChart() {
     }],
   }, true);
 }
-window.addEventListener('resize', () => chart?.resize());
+window.addEventListener('resize', () => { chart?.resize(); curveChart?.resize(); });
 
 /* ---------- 主题 ---------- */
 const isDark = () => document.documentElement.dataset.theme === 'dark';
@@ -455,7 +466,9 @@ $('#theme-toggle').onclick = () => {
   else delete document.documentElement.dataset.theme;
   localStorage.setItem('theme', next);
   syncThemeIcon();
-  if (chart) renderChart();   // ECharts 配色在渲染时读取 CSS 变量，需重绘
+  // ECharts 配色在渲染时读取 CSS 变量，需重绘
+  if (chart) renderChart();
+  if (curveChart) renderCurve();
 };
 
 /* ---------- 视图切换 ---------- */
@@ -482,11 +495,16 @@ async function loadPortfolio() {
       <div class="value ${cls(s.day_pnl)}">${signMoney(s.day_pnl)}</div><div class="delta">&nbsp;</div></div>
     <div class="tile"><div class="label">累计收益</div>
       <div class="value ${cls(s.total_pnl)}">${signMoney(s.total_pnl)}</div>
-      <div class="delta ${cls(s.pnl_rate)}">${fmtPct(s.pnl_rate)}</div></div>`;
+      <div class="delta ${cls(s.pnl_rate)}">${fmtPct(s.pnl_rate)}</div></div>
+    <div class="tile"><div class="label">年化收益率 (XIRR)</div>
+      <div class="value ${cls(s.xirr)}">${fmtPct(s.xirr)}</div>
+      <div class="delta">按资金实际占用时间加权</div></div>`;
   if (!d.holdings.length) {
     $('#p-body').innerHTML = '<div class="loading">还没有持仓，点右上角「记一笔」开始</div>';
+    $('#curve-chart').innerHTML = '';
     return;
   }
+  loadCurve();
   const head = ['名称', '代码', '份额', '净值/价', '市值', '当日盈亏', '持有收益', '占比'];
   const rows = d.holdings.map(h => `
     <tr data-code="${h.code}" data-asset="${h.asset}">
@@ -504,6 +522,62 @@ async function loadPortfolio() {
     const tr = e.target.closest('tr');
     if (tr) openHolding(tr.dataset.code, tr.dataset.asset);
   });
+}
+
+/* ---------- 收益曲线 ---------- */
+const CURVE_RANGES = [['1月', 30], ['3月', 90], ['1年', 250], ['全部', Infinity]];
+let curveChart, curveData = [], curveRange = 250;
+
+async function loadCurve() {
+  curveData = await (await fetch('/api/portfolio/curve')).json();
+  $('#c-ranges').innerHTML = CURVE_RANGES.map(([label, n]) =>
+    `<button data-n="${n}" class="${n === curveRange ? 'active' : ''}">${label}</button>`).join('');
+  $('#c-ranges').onclick = e => {
+    const n = e.target.dataset.n;
+    if (!n) return;
+    curveRange = Number(n);
+    [...$('#c-ranges').children].forEach(b => b.classList.toggle('active', b.dataset.n === n));
+    renderCurve();
+  };
+  renderCurve();
+}
+
+function renderCurve() {
+  if (!curveData.length) return;
+  const css = getComputedStyle(document.documentElement);
+  const C = n => css.getPropertyValue(n).trim();
+  const s = curveData.slice(-Math.min(curveRange, curveData.length));
+  curveChart = curveChart || echarts.init($('#curve-chart'));
+  curveChart.setOption({
+    grid: { left: 64, right: 16, top: 40, bottom: 28 },
+    legend: { data: ['市值', '投入成本'], top: 0, left: 0, icon: 'roundRect',
+              itemWidth: 12, itemHeight: 3, textStyle: { color: C('--text-secondary') } },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'cross' },
+      backgroundColor: C('--surface-1'), borderColor: C('--gridline'),
+      textStyle: { color: C('--text-primary') },
+      valueFormatter: v => '¥' + Number(v).toLocaleString('zh-CN', {minimumFractionDigits: 2, maximumFractionDigits: 2}),
+    },
+    xAxis: {
+      type: 'category', data: s.map(x => x.date), boundaryGap: false,
+      axisLine: { lineStyle: { color: C('--baseline') } },
+      axisLabel: { color: C('--text-muted') }, axisTick: { show: false },
+    },
+    yAxis: {
+      type: 'value', scale: true,
+      splitLine: { lineStyle: { color: C('--gridline'), width: 1 } },
+      // 2 位小数：区间窄时刻度值接近，1 位会压成重复标签
+      axisLabel: { color: C('--text-muted'),
+                   formatter: v => Math.abs(v) >= 10000 ? (v / 10000).toFixed(2) + '万' : Math.round(v) },
+    },
+    series: [
+      { name: '市值', type: 'line', data: s.map(x => x.value), showSymbol: false,
+        lineStyle: { width: 2, color: C('--series-1') }, itemStyle: { color: C('--series-1') },
+        areaStyle: { color: C('--series-1'), opacity: 0.1 } },
+      { name: '投入成本', type: 'line', step: 'end', data: s.map(x => x.cost), showSymbol: false,
+        lineStyle: { width: 2, color: C('--series-2') }, itemStyle: { color: C('--series-2') } },
+    ],
+  }, true);
 }
 
 async function openHolding(code, asset) {
