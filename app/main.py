@@ -83,8 +83,10 @@ def api_portfolio():
 
 @app.get("/api/market-status")
 def api_market_status():
+    now = estimate.now_cn()
     return {"trading": estimate.is_trading_now(),
-            "time": estimate.now_cn().strftime("%Y-%m-%d %H:%M")}
+            "is_trading_day": estimate.is_trading_day(now.date()),
+            "time": now.strftime("%Y-%m-%d %H:%M")}
 
 
 @app.get("/api/portfolio/curve")

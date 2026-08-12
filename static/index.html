@@ -547,7 +547,9 @@ async function syncMarketStatus() {
   const m = await (await fetch('/api/market-status')).json();
   const el = $('#market-status');
   el.className = 'mkt' + (m.trading ? ' live' : '');
-  el.textContent = m.trading ? `交易中 · 估值每分钟刷新` : `已收盘 · ${m.time}`;
+  el.textContent = m.trading ? '交易中 · 估值每分钟刷新'
+                 : m.is_trading_day ? `已收盘 · ${m.time}`
+                 : `非交易日 · ${m.time}`;
   clearInterval(mktTimer);
   if (m.trading) {
     // 只在交易时段轮询，收盘后静止，避免无谓请求

@@ -7,7 +7,8 @@
 估算值一律标注覆盖率，收盘后由官方净值覆盖。债券/货币/QDII 不做盘中估值。
 """
 
-from datetime import datetime, time as Time, timedelta, timezone
+import time
+from datetime import date, datetime, time as Time, timedelta, timezone
 
 import akshare as ak
 
@@ -25,9 +26,54 @@ def now_cn() -> datetime:
     return datetime.now(CN_TZ)
 
 
+# ---------- 交易日历 ----------
+
+_cal: set[date] = set()
+_cal_at: float = 0.0
+
+
+def sync_trade_calendar() -> int:
+    """同步 A 股交易日历入库（含节假日调休）。幂等，返回入库总数。"""
+    from app.db import pool
+
+    df = ak.tool_trade_date_hist_sina()
+    days = [(d,) for d in df["trade_date"]]
+    with pool.connection() as conn:
+        conn.cursor().executemany(
+            "INSERT INTO trade_calendar(date) VALUES(%s) ON CONFLICT DO NOTHING", days
+        )
+    return len(days)
+
+
+def trade_days() -> set[date]:
+    """交易日集合。内存缓存 1 天；库里缺失或未覆盖今年则先同步。"""
+    global _cal, _cal_at
+    from app.db import pool
+
+    if _cal and time.time() - _cal_at < 86400:
+        return _cal
+    with pool.connection() as conn:
+        latest = conn.execute("SELECT MAX(date) AS d FROM trade_calendar").fetchone()["d"]
+        if latest is None or latest < now_cn().date():
+            try:
+                sync_trade_calendar()
+            except Exception:
+                pass                      # 拉取失败则用库里已有的，实在没有就退化为按周判断
+        rows = conn.execute("SELECT date FROM trade_calendar").fetchall()
+    _cal, _cal_at = {r["date"] for r in rows}, time.time()
+    return _cal
+
+
+def is_trading_day(d: date) -> bool:
+    cal = trade_days()
+    if not cal:
+        return d.weekday() < 5            # 日历不可用时的退化判断
+    return d in cal
+
+
 def is_trading_now() -> bool:
     n = now_cn()
-    if n.weekday() >= 5:          # 未含节假日日历，非交易日会估出 0 涨跌，不影响正确性
+    if not is_trading_day(n.date()):
         return False
     t = n.time()
     return MORNING[0] <= t <= MORNING[1] or AFTERNOON[0] <= t <= AFTERNOON[1]

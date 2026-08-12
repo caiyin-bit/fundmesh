@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS nav_history (
 
 -- 当日盘中估算涨跌幅。官方净值到账后与 growth 并存，用于回看估值偏差。
 ALTER TABLE nav_history ADD COLUMN IF NOT EXISTS est_growth DOUBLE PRECISION;
+
+-- A 股交易日历（含节假日调休）。落库是为了数据源不可用时仍能判断交易日。
+CREATE TABLE IF NOT EXISTS trade_calendar (
+  date DATE PRIMARY KEY
+);
 """
 
 # 行情表转 hypertable + 列式压缩，供回测扫描。TimescaleDB 不可用时跳过，

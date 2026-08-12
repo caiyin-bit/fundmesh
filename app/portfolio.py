@@ -118,7 +118,14 @@ def add_transaction(code: str, asset: str, type_: str, day: str, amount: float,
                 sync_nav(code)
                 price = nav_on(code, day)
             if price is None:
-                raise ValueError(f"{day} 无 {code} 净值（非交易日或净值未公布），请改日期或手填份额")
+                # pingzhongdata 比移动端接口滞后一天，当日净值只能从后者拿
+                latest = data.batch_latest_nav([code]).get(code)
+                if latest and latest["date"] == day:
+                    price = latest["nav"]
+            if price is None:
+                if not estimate.is_trading_day(day):
+                    raise ValueError(f"{day} 不是交易日，请填写实际的份额确认日")
+                raise ValueError(f"{day} 的 {code} 净值尚未公布，请稍后再录或手填份额")
             shares = round(amount / price, 2)
         else:  # etf 必须给成交价或份额
             if not price:
