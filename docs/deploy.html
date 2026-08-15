@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FundMesh 线上部署方案 · 首尔 VPS</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:      #f9f9f7;
+    --surface:   #fcfcfb;
+    --ink:       #0b0b0b;
+    --ink-2:     #52514e;
+    --muted:     #898781;
+    --grid:      #e1e0d9;
+    --border:    rgba(11,11,11,.10);
+    --accent:    #2a78d6;
+    --accent-2:  #eb6834;
+    --good:      #0ca30c;
+    --warn:      #fab219;
+    --crit:      #d03b3b;
+    --code-bg:   #f2f1ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page:    #0d0d0d;
+      --surface: #1a1a19;
+      --ink:     #fff;
+      --ink-2:   #c3c2b7;
+      --muted:   #898781;
+      --grid:    #2c2c2a;
+      --border:  rgba(255,255,255,.10);
+      --accent:  #3987e5;
+      --accent-2:#d95926;
+      --code-bg: #111110;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.75 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 56px 24px 96px; }
+
+  header.doc { border-bottom: 1px solid var(--grid); padding-bottom: 28px; margin-bottom: 40px; }
+  header.doc .eyebrow { color: var(--accent); font-weight: 600; font-size: 13px; letter-spacing: .04em; }
+  header.doc h1 { font-size: 30px; margin: 6px 0 10px; letter-spacing: -.01em; }
+  header.doc .sub { color: var(--ink-2); margin: 0; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .meta span {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--border); color: var(--ink-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  h2 {
+    font-size: 20px; margin: 48px 0 4px; letter-spacing: -.01em;
+    padding-top: 20px; border-top: 1px solid var(--grid);
+  }
+  h2:first-of-type { border-top: none; padding-top: 0; }
+  h2 .num { color: var(--muted); font-weight: 500; margin-right: 10px; }
+  h3 { font-size: 16px; margin: 30px 0 8px; }
+  p  { margin: 10px 0; }
+  ul, ol { margin: 10px 0; padding-left: 22px; }
+  li { margin: 5px 0; }
+  a { color: var(--accent); }
+  strong { font-weight: 650; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .89em;
+    background: var(--code-bg); padding: 1.5px 5px; border-radius: 4px;
+  }
+
+  /* 代码块 */
+  .code { position: relative; margin: 14px 0; }
+  .code pre {
+    margin: 0; background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px; line-height: 1.65;
+  }
+  .code pre code { background: none; padding: 0; }
+  .code .cp {
+    position: absolute; top: 8px; right: 8px; opacity: 0; transition: opacity .12s;
+    font: inherit; font-size: 11px; padding: 3px 9px; cursor: pointer;
+    background: var(--surface); color: var(--ink-2);
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  .code:hover .cp { opacity: 1; }
+  .code .cp:hover { color: var(--ink); border-color: var(--accent); }
+  .cmt { color: var(--muted); }
+
+  /* 表格 */
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  thead th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* 提示块 */
+  .note {
+    margin: 18px 0; padding: 14px 16px; border-radius: 10px;
+    background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--muted);
+  }
+  .note .t { font-weight: 650; margin-bottom: 4px; font-size: 14px; }
+  .note p:last-child { margin-bottom: 0; }
+  .note p:first-of-type { margin-top: 0; }
+  .note.warn  { border-left-color: var(--warn); }
+  .note.crit  { border-left-color: var(--crit); }
+  .note.info  { border-left-color: var(--accent); }
+  .note.ok    { border-left-color: var(--good); }
+
+  /* 步骤 */
+  .step { display: flex; gap: 14px; margin: 26px 0; }
+  .step .idx {
+    flex: none; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: 13px; font-weight: 600;
+    display: grid; place-items: center; margin-top: 2px;
+  }
+  .step .body { flex: 1; min-width: 0; }
+  .step .body > :first-child { margin-top: 0; }
+
+  /* 架构图 */
+  figure { margin: 24px 0; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption { color: var(--muted); font-size: 13px; margin-top: 10px; text-align: center; }
+
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { padding-left: 26px; position: relative; }
+  .checklist li::before {
+    content: '☐'; position: absolute; left: 4px; color: var(--muted);
+  }
+  footer.doc { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--grid);
+               color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <div class="eyebrow">部署方案</div>
+  <h1>FundMesh 线上部署</h1>
+  <p class="sub">部署至首尔 VPS，经 Cloudflare Tunnel 提供域名访问</p>
+  <div class="meta">
+    <span>目标机 141.164.53.169</span>
+    <span>与 polyorders 同机</span>
+    <span>镜像 453 MB</span>
+    <span>基线提交 dc3f9e7</span>
+  </div>
+</header>
+
+<!-- ───────────────────────── 1 ───────────────────────── -->
+<h2><span class="num">01</span>架构</h2>
+
+<figure>
+<svg viewBox="0 0 820 300" role="img" aria-label="架构图">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g font-family="system-ui, sans-serif" font-size="13">
+
+    <!-- Cloudflare -->
+    <rect x="20" y="24" width="180" height="66" rx="10"
+          fill="var(--surface)" stroke="var(--accent)" stroke-width="1.5"/>
+    <text x="110" y="52" text-anchor="middle" fill="var(--ink)" font-weight="600">Cloudflare</text>
+    <text x="110" y="72" text-anchor="middle" fill="var(--muted)" font-size="11.5">DNS · TLS · 边缘</text>
+
+    <!-- 浏览器 -->
+    <text x="110" y="140" text-anchor="middle" fill="var(--muted)" font-size="11.5">用户浏览器</text>
+    <path d="M110,120 L110,96" stroke="var(--muted)" stroke-width="1.5"
+          marker-end="url(#ar)" color="var(--muted)"/>
+
+    <!-- 隧道连线 -->
+    <path d="M200,57 L330,57" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4"
+          marker-end="url(#ar)" color="var(--accent)"/>
+    <text x="265" y="46" text-anchor="middle" fill="var(--accent)" font-size="11">出站隧道</text>
+
+    <!-- VPS 边框 -->
+    <rect x="330" y="16" width="470" height="264" rx="12"
+          fill="none" stroke="var(--grid)" stroke-width="1.5"/>
+    <text x="345" y="36" fill="var(--muted)" font-size="11.5">VPS 141.164.53.169（首尔）</text>
+
+    <!-- fundmesh stack -->
+    <rect x="348" y="50" width="436" height="118" rx="10"
+          fill="var(--surface)" stroke="var(--border)"/>
+    <text x="362" y="70" fill="var(--accent)" font-size="11.5" font-weight="600">fundmesh 编排</text>
+
+    <rect x="362" y="80" width="124" height="46" rx="8" fill="none" stroke="var(--accent)"/>
+    <text x="424" y="102" text-anchor="middle" fill="var(--ink)" font-size="12">cloudflared</text>
+    <text x="424" y="117" text-anchor="middle" fill="var(--muted)" font-size="10.5">无入站端口</text>
+
+    <rect x="510" y="80" width="124" height="46" rx="8" fill="none" stroke="var(--accent)"/>
+    <text x="572" y="102" text-anchor="middle" fill="var(--ink)" font-size="12">web</text>
+    <text x="572" y="117" text-anchor="middle" fill="var(--muted)" font-size="10.5">FastAPI :8000</text>
+
+    <rect x="658" y="80" width="112" height="46" rx="8" fill="none" stroke="var(--accent-2)"/>
+    <text x="714" y="102" text-anchor="middle" fill="var(--ink)" font-size="12">db</text>
+    <text x="714" y="117" text-anchor="middle" fill="var(--muted)" font-size="10.5">TimescaleDB</text>
+
+    <path d="M486,103 L508,103" stroke="var(--muted)" stroke-width="1.4" marker-end="url(#ar)" color="var(--muted)"/>
+    <path d="M634,103 L656,103" stroke="var(--muted)" stroke-width="1.4" marker-end="url(#ar)" color="var(--muted)"/>
+
+    <text x="714" y="150" text-anchor="middle" fill="var(--muted)" font-size="10.5">卷 pgdata（唯一有状态）</text>
+
+    <!-- polyorders -->
+    <rect x="348" y="188" width="436" height="72" rx="10"
+          fill="var(--surface)" stroke="var(--border)" stroke-dasharray="4 4"/>
+    <text x="362" y="208" fill="var(--muted)" font-size="11.5" font-weight="600">polyorders 编排（不受影响）</text>
+    <rect x="362" y="218" width="124" height="30" rx="8" fill="none" stroke="var(--muted)"/>
+    <text x="424" y="238" text-anchor="middle" fill="var(--ink-2)" font-size="12">caddy</text>
+    <text x="510" y="238" fill="var(--muted)" font-size="11.5">已占用 :80 / :443 —— fundmesh 完全不碰这两个端口</text>
+  </g>
+</svg>
+<figcaption>隧道为出站长连接，VPS 无需开放任何入站端口，因此与 polyorders 的 Caddy 无冲突</figcaption>
+</figure>
+
+<h3>两个关键决定及其理由</h3>
+<table>
+  <thead><tr><th style="width:26%">决定</th><th>理由</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>用 Cloudflare Tunnel<br>而非 Caddy 反代</strong></td>
+      <td>该机 polyorders 的 Caddy 已绑定 <code>0.0.0.0:80</code> 与 <code>:443</code>，再起一个反代必然端口冲突。隧道是<strong>出站</strong>连接，不占端口、不需在源站签发和续期证书，也无需改动 polyorders 的任何配置。</td>
+    </tr>
+    <tr>
+      <td><strong>在 VPS 上构建<br>而非拉 GHCR 镜像</strong></td>
+      <td>fundmesh 仓库为私有，私有包计入 GHCR 那 500 MB 配额（polyorders 已在使用）。而本项目镜像含 pandas / akshare，实测 453 MB，存不下几个版本。代价是构建负载落在 VPS 上，换来零配额依赖。</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ───────────────────────── 2 ───────────────────────── -->
+<h2><span class="num">02</span>资源评估</h2>
+
+<p>TimescaleDB 是 Postgres 的扩展，<strong>空载开销与普通 Postgres 相当</strong>（约 100–200 MB 内存）。真正的压力来自数据量，而不同阶段差着数量级：</p>
+
+<table>
+  <thead><tr><th>阶段</th><th class="num">磁盘（压缩后）</th><th class="num">内存建议</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><strong>本次上线</strong>（个人持仓 + 持有基金净值历史）</td><td class="num">&lt; 100 MB</td><td class="num">512 MB</td><td>几十笔流水、几万条净值</td></tr>
+    <tr><td>全市场基金日频（约 3000 万行）</td><td class="num">1–2 GB</td><td class="num">1 GB</td><td>轻松</td></tr>
+    <tr><td>叠加股票日线（再约 3000 万行）</td><td class="num">2–4 GB</td><td class="num">2 GB</td><td>仍然轻松</td></tr>
+    <tr><td>分钟级行情（几十亿行）</td><td class="num">20–40 GB</td><td class="num">4 GB+</td><td>唯一真正的坎，届时再评估</td></tr>
+  </tbody>
+</table>
+
+<p>本次上线新增占用合计约 <strong>1 GB</strong>：fundmesh 镜像 453 MB、TimescaleDB 镜像约 400 MB、初期数据不足 100 MB。</p>
+
+<div class="note warn">
+  <div class="t">待核实：VPS 实际规格</div>
+  <p>该机已运行 polyorders 的 9 个容器（Next.js、scheduler、watcher、Caddy 等）。我没有该主机的可用凭据，无法实测规格 —— 本地仅有的 <code>polyorders_deploy</code> 密钥被 <code>restrict,command=</code> 限定为只能执行 polyorders 发布脚本，用它连接会触发一次 polyorders 生产部署，故未使用。</p>
+  <div class="code"><button class="cp">复制</button><pre><code>ssh root@141.164.53.169 'nproc; free -h; df -h /; docker system df'</code></pre></div>
+  <p>把输出发我即可给出确切结论。按上表估算，只要磁盘余量 &gt; 3 GB、内存余量 &gt; 512 MB，本次上线即可安全进行。</p>
+</div>
+
+<!-- ───────────────────────── 3 ───────────────────────── -->
+<h2><span class="num">03</span>仓库中已就绪的文件</h2>
+
+<table>
+  <thead><tr><th style="width:34%">文件</th><th>作用</th></tr></thead>
+  <tbody>
+    <tr><td><code>Dockerfile</code></td><td>多阶段构建。依赖层与源码层分离，改代码不触发 pandas / akshare 重装；内置健康检查</td></tr>
+    <tr><td><code>docker-compose.vps.yml</code></td><td>cloudflared + web + db 三服务，<strong>不绑定任何宿主端口</strong></td></tr>
+    <tr><td><code>.env.vps.example</code></td><td>配置模板，仅两个变量</td></tr>
+    <tr><td><code>scripts/vps-deploy.sh</code></td><td>日常发布：拉代码 → 构建 → 重启</td></tr>
+    <tr><td><code>scripts/check-datasources.sh</code></td><td>实测 10 个国内数据源的可达性与耗时</td></tr>
+  </tbody>
+</table>
+
+<div class="note ok">
+  <div class="t">已在本地验证</div>
+  <p>镜像构建通过（453 MB）；容器启动后健康检查为 <code>healthy</code>；<code>/api/market-status</code>、<code>/api/indices</code>、首页均返回 <strong>HTTP 200</strong>，<code>/api/indices</code> 实际拉取国内行情耗时 0.94 s。</p>
+</div>
+
+<!-- ───────────────────────── 4 ───────────────────────── -->
+<h2><span class="num">04</span>部署步骤</h2>
+
+<div class="step">
+  <div class="idx">1</div>
+  <div class="body">
+    <h3>Cloudflare：创建隧道</h3>
+    <p>控制台 → <strong>Zero Trust → Networks → Tunnels → Create a tunnel</strong>，类型选 <strong>Cloudflared</strong>，命名 <code>fundmesh</code>。</p>
+    <p>创建后选择 <strong>Docker</strong> 安装方式，复制命令中 <code>--token</code> 后的那一长串备用。</p>
+    <p>在 <strong>Public Hostnames</strong> 添加一条：</p>
+    <table>
+      <tbody>
+        <tr><td style="width:30%">Subdomain</td><td><code>fundmesh</code></td></tr>
+        <tr><td>Domain</td><td><code>bluesignals.cc</code>（与 polyorders 同域，或任意已托管域名）</td></tr>
+        <tr><td>Type</td><td><code>HTTP</code></td></tr>
+        <tr><td>URL</td><td><code>web:8000</code></td></tr>
+      </tbody>
+    </table>
+    <p><code>web</code> 是 compose 中的服务名 —— cloudflared 与它同处一个网络，按服务名解析即可。DNS 记录由隧道自动创建，无需手工添加。</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="idx">2</div>
+  <div class="body">
+    <h3>GitHub：添加只读部署密钥</h3>
+    <p>仓库为私有，VPS 需要凭据才能 clone。在 VPS 上生成一把专用密钥：</p>
+    <div class="code"><button class="cp">复制</button><pre><code>ssh-keygen -t ed25519 -f ~/.ssh/fundmesh_deploy -N ''
+cat ~/.ssh/fundmesh_deploy.pub</code></pre></div>
+    <p>把输出的公钥加到 <strong>仓库 Settings → Deploy keys</strong>，<strong>不要</strong>勾选写权限，并配置 SSH 使用它：</p>
+    <div class="code"><button class="cp">复制</button><pre><code>cat &gt;&gt; ~/.ssh/config &lt;&lt;'EOF'
+Host github.com
+  IdentityFile ~/.ssh/fundmesh_deploy
+  IdentitiesOnly yes
+EOF</code></pre></div>
+  </div>
+</div>
+
+<div class="step">
+  <div class="idx">3</div>
+  <div class="body">
+    <h3>VPS：首次部署</h3>
+    <div class="code"><button class="cp">复制</button><pre><code>ssh root@141.164.53.169
+
+mkdir -p /opt/fundmesh &amp;&amp; cd /opt/fundmesh
+git clone git@github.com:caiyin-bit/fundmesh.git app
+cd app
+
+cp .env.vps.example .env
+vi .env          <span class="cmt"># 填 POSTGRES_PASSWORD 与 CF_TUNNEL_TOKEN</span>
+
+docker compose -f docker-compose.vps.yml up -d --build</code></pre></div>
+    <p>首次构建约需数分钟（安装 pandas / akshare）。表结构由应用启动时的 <code>init_db()</code> 自动建立，<strong>没有单独的迁移步骤</strong>。</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="idx">4</div>
+  <div class="body">
+    <h3>验证</h3>
+    <div class="code"><button class="cp">复制</button><pre><code>cd /opt/fundmesh/app
+
+<span class="cmt"># 三个服务均应 Up，db 为 healthy</span>
+docker compose -f docker-compose.vps.yml ps
+
+<span class="cmt"># 首启日志：建表、同步交易日历、启用 TimescaleDB</span>
+docker compose -f docker-compose.vps.yml logs web | tail -30
+
+<span class="cmt"># 确认 hypertable 已生效</span>
+docker compose -f docker-compose.vps.yml exec db \
+  psql -U fundmesh -c "SELECT hypertable_name FROM timescaledb_information.hypertables;"
+
+<span class="cmt"># 国内数据源从首尔的可达性与耗时</span>
+sh scripts/check-datasources.sh</code></pre></div>
+    <p>随后浏览器打开 <code>https://fundmesh.bluesignals.cc</code>。</p>
+  </div>
+</div>
+
+<div class="note info">
+  <div class="t">线上会自动启用 TimescaleDB</div>
+  <p><code>init_db()</code> 会检测扩展是否可用，可用则把 <code>nav_history</code> 转为 hypertable 并挂上压缩策略。本地因 OrbStack 磁盘的块位图计数损坏（文件系统报 59.5 G 已用，实际仅 15.5 G）而未能启用，VPS 上为全新磁盘，不受影响。</p>
+</div>
+
+<!-- ───────────────────────── 5 ───────────────────────── -->
+<h2><span class="num">05</span>日常发布</h2>
+
+<div class="code"><button class="cp">复制</button><pre><code>ssh root@141.164.53.169 'cd /opt/fundmesh/app &amp;&amp; sh scripts/vps-deploy.sh'</code></pre></div>
+
+<p>脚本依次执行 <code>git pull</code> → 构建 → 重启。<strong>构建失败时线上仍运行旧容器</strong>，失败的发布等于什么都没发生。</p>
+
+<div class="note warn">
+  <div class="t">发布没有测试门禁</div>
+  <p>polyorders 的流水线以 <code>pnpm test</code> 把关，而 fundmesh 目前<strong>没有任何自动化测试</strong>，"失败的发布等于什么都没发生"这一性质仅覆盖构建错误，覆盖不到逻辑回归。</p>
+  <p>建议优先为核心计算补测试：XIRR（已有四组已知答案，可直接转为用例）、份额与成本推导、分红与拆分的顺序处理、估值加权。约半天工作量。</p>
+</div>
+
+<!-- ───────────────────────── 6 ───────────────────────── -->
+<h2><span class="num">06</span>备份</h2>
+
+<p><code>pgdata</code> 卷是整套部署中<strong>唯一有状态的东西</strong> —— 你的账目与行情历史。容器和镜像都可以随时重建，这个卷不能丢。</p>
+
+<div class="code"><button class="cp">复制</button><pre><code><span class="cmt"># 每日 03:00 导出，crontab -e</span>
+0 3 * * * cd /opt/fundmesh/app &amp;&amp; docker compose -f docker-compose.vps.yml exec -T db \
+  pg_dump -U fundmesh fundmesh | gzip &gt; /opt/fundmesh/backup/$(date +\%F).sql.gz</code></pre></div>
+
+<p>两点提醒：设置保留策略，避免磁盘被历史备份塞满；<strong>只在同一台机器上留备份等于没有备份</strong>，机器没了备份一起没，需要异地副本（对象存储或另一台机器）。</p>
+
+<!-- ───────────────────────── 7 ───────────────────────── -->
+<h2><span class="num">07</span>故障排查</h2>
+
+<table>
+  <thead><tr><th style="width:32%">现象</th><th>排查方向</th></tr></thead>
+  <tbody>
+    <tr><td>域名打不开，隧道显示 down</td><td><code>docker compose logs cloudflared</code>。多为 token 填错或未重启；公开主机名的 URL 必须是 <code>web:8000</code> 而非 <code>localhost:8000</code></td></tr>
+    <tr><td>502 / 无法连到源站</td><td>确认 <code>web</code> 容器为 healthy；cloudflared 与 web 需在同一 compose 网络内</td></tr>
+    <tr><td>web 起不来，日志报连库失败</td><td>确认 <code>db</code> 为 healthy；<code>.env</code> 中密码修改后需一并修改库内密码，否则连不上</td></tr>
+    <tr><td>页面能开但数据为空</td><td>跑 <code>scripts/check-datasources.sh</code>，多为国内数据源从境外不可达或超时</td></tr>
+    <tr><td>构建时磁盘不足</td><td><code>docker image prune -f</code>；构建缓存可用 <code>docker builder prune</code> 清理</td></tr>
+  </tbody>
+</table>
+
+<!-- ───────────────────────── 8 ───────────────────────── -->
+<h2><span class="num">08</span>已知限制</h2>
+
+<div class="note crit">
+  <div class="t">应用层没有任何认证</div>
+  <p>当前所有接口对外开放。上线后，任何知道域名的人都能查看你的持仓、成本与收益，并可调用 <code>POST /api/transactions</code> 修改账本。这是按你的决定「先部署、认证后续再加」执行的结果。</p>
+  <p><strong>不改代码的过渡方案：</strong>在 Cloudflare <strong>Zero Trust → Access → Applications</strong> 为该主机名添加一条自托管应用策略，认证方式选邮箱一次性验证码。约五分钟配置完成，可在你补齐用户系统之前挡住全部陌生访问。</p>
+</div>
+
+<ul>
+  <li><strong>数据源从首尔的可达性未实测。</strong>本地基线 10 项全通过，但境外访问国内接口的表现需在 VPS 上用 <code>check-datasources.sh</code> 确认。若耗时显著升高，需调大 HTTP 超时、延长大文件（基金全量列表 3.1 MB）的缓存 TTL、放宽盘中估值轮询间隔。</li>
+  <li><strong>无自动化测试</strong>，发布无逻辑门禁（见第 05 节）。</li>
+  <li><strong>净值同步依赖页面访问。</strong>目前仅在打开持仓页时回写最新净值，长期不访问会使 <code>nav_history</code> 出现空洞，收益曲线变稀疏（有前值填充，不会算错，但精度下降）。后续可加一个夜间同步任务。</li>
+  <li><strong>代理估值缺少设置入口。</strong><code>assets.proxy_code</code> 字段与逻辑均已就绪，但没有界面可设置；当前一律走重仓股加权（覆盖率 47%–95%，界面已标注）。</li>
+</ul>
+
+<footer class="doc">
+  FundMesh 部署方案 · 对应提交 <code>dc3f9e7</code> · 详见仓库 <code>docs/DEPLOY.md</code>
+</footer>
+
+</div>
+
+<script>
+  // 代码块复制：纯本地实现，无外部依赖
+  document.querySelectorAll('.code').forEach(box => {
+    const btn = box.querySelector('.cp');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(box.querySelector('code').innerText);
+      const old = btn.textContent;
+      btn.textContent = '已复制';
+      setTimeout(() => btn.textContent = old, 1200);
+    });
+  });
+</script>
+</body>
+</html>
