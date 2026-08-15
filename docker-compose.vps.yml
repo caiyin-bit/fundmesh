@@ -1,0 +1,42 @@
+# 首尔 VPS 生产编排：cloudflared(入口) + web(FastAPI) + db(TimescaleDB)
+#
+# 不绑任何宿主端口：这台机器上 polyorders 的 Caddy 已占用 80/443。
+# Cloudflare Tunnel 是出站连接，无需入站端口，也不用在源站管理 TLS 证书。
+services:
+  db:
+    image: timescale/timescaledb:latest-pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fundmesh
+      POSTGRES_USER: fundmesh
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fundmesh"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    image: fundmesh:local
+    restart: unless-stopped
+    environment:
+      FUNDMESH_DSN: postgresql://fundmesh:${POSTGRES_PASSWORD:?required}@db:5432/fundmesh
+      TZ: Asia/Shanghai
+    depends_on:
+      db:
+        condition: service_healthy
+    # 不暴露到宿主：cloudflared 经 compose 内部网络按服务名访问
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # token 里已包含隧道配置，公开主机名在 Cloudflare 控制台指向 http://web:8000
+    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN:?required}
+    depends_on:
+      - web
+
+volumes:
+  pgdata:      # 你的账目与行情历史，唯一有状态的东西，备份只需备它
